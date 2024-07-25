@@ -3,6 +3,9 @@
 //
 
 #include "il2cpp_dump.h"
+#include <iostream>
+#include <chrono>
+#include <thread>
 #include <dlfcn.h>
 #include <cstdlib>
 #include <cstring>
@@ -12,6 +15,9 @@
 #include <sstream>
 #include <fstream>
 #include <unistd.h>
+#include <vector>
+#include <cstring>
+#include <cinttypes>
 #include "xdl.h"
 #include "log.h"
 #include "il2cpp-tabledefs.h"
@@ -25,6 +31,7 @@
 
 static uint64_t il2cpp_base = 0;
 
+static std::vector<std::string> outJsons;
 void init_il2cpp_api(void *handle) {
 #define DO_API(r, n, p) {                      \
     n = (r (*) p)xdl_sym(handle, #n, nullptr); \
@@ -96,6 +103,11 @@ std::string dump_method(Il2CppClass *klass) {
     std::stringstream outPut;
     outPut << "\n\t// Methods\n";
     void *iter = nullptr;
+
+    std::stringstream outJson;
+    const char* moduleName = il2cpp_class_get_namespace(klass);
+    const char* clsName = il2cpp_class_get_name(klass);
+
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
         if (method->methodPointer) {
@@ -103,6 +115,9 @@ std::string dump_method(Il2CppClass *klass) {
             outPut << std::hex << (uint64_t) method->methodPointer - il2cpp_base;
             outPut << " VA: 0x";
             outPut << std::hex << (uint64_t) method->methodPointer;
+            outJson << std::hex << (uint64_t) method->methodPointer - il2cpp_base << "|" << moduleName << "." << clsName <<"$$" << il2cpp_method_get_name(method);
+            outJson << "\n\t";
+            outJsons.push_back(outJson);
         } else {
             outPut << "\t// RVA: 0x VA: 0x0";
         }
@@ -323,6 +338,7 @@ std::string dump_type(const Il2CppType *type) {
 }
 
 void il2cpp_api_init(void *handle) {
+    outJsons.clear();
     LOGI("il2cpp_handle: %p", handle);
     init_il2cpp_api(handle);
     if (il2cpp_domain_get_assemblies) {
@@ -344,7 +360,10 @@ void il2cpp_api_init(void *handle) {
 }
 
 void il2cpp_dump(const char *outDir) {
-    LOGI("dumping...");
+    LOGI("Waiting for 12 seconds before dumping...");
+    std::this_thread::sleep_for(std::chrono::seconds(12)); // Aguarda por 12 segundos
+    
+    LOGI("Dumping...");
     size_t size;
     auto domain = il2cpp_domain_get();
     auto assemblies = il2cpp_domain_get_assemblies(domain, &size);
@@ -352,6 +371,12 @@ void il2cpp_dump(const char *outDir) {
     for (int i = 0; i < size; ++i) {
         auto image = il2cpp_assembly_get_image(assemblies[i]);
         imageOutput << "// Image " << i << ": " << il2cpp_image_get_name(image) << "\n";
+        auto filename = std::string(outDir).append("/files/dump/image");
+        filename.append(il2cpp_image_get_name(image));
+        FILE *fpDecrypted = fopen(filename.c_str(), "wb");
+        fwrite(((_il2cpp_image *)image)->raw_data, ((_il2cpp_image *)image)->raw_data_len, 1, fpDecrypted);
+        fclose(fpDecrypted);
+        LOGI("Image:%s - %p", il2cpp_image_get_name(image), image);
     }
     std::vector<std::string> outPuts;
     if (il2cpp_image_get_class) {
@@ -416,7 +441,7 @@ void il2cpp_dump(const char *outDir) {
             }
         }
     }
-    LOGI("write dump file");
+    LOGI("Writing dump file");
     auto outPath = std::string(outDir).append("/files/dump.cs");
     std::ofstream outStream(outPath);
     outStream << imageOutput.str();
@@ -425,5 +450,16 @@ void il2cpp_dump(const char *outDir) {
         outStream << outPuts[i];
     }
     outStream.close();
-    LOGI("dump done!");
+
+    auto outJsonPath = std::string(outDir).append("/files/script.json");
+    std::ofstream outJsonStream(outJsonPath);
+
+    auto countJson = outJsons.size();
+    LOGI("json count=%d",countJson);
+    for (int i = 0; i < countJson; ++i) {
+        outJsonStream << outJsons[i];
+    }
+    outJsonStream.close();
+
+    LOGI("Dump done!");
 }
